@@ -1,34 +1,58 @@
-autocmd BufRead,BufNewFile *.dew set filetype=dew
+if exists("b:current_syntax")
+  finish
+endif
 
-syntax match comment /^\s*;.*$/
-syntax match context /@\w\+/
-syntax match deadline /\v<d\d{4}-\d{2}-\d{2}>/
-syntax match done /^\s*x\s\+.*$/
-syntax match inbox /^\s*?.*$/
-syntax match lint /^\s*!.*$/
-syntax match nextInactive /^\s*#/
-syntax match nextActive /^\s*>\s\+.*$/
-syntax match outcome /^\s\+o\s\+/
-syntax match projectActive /^\s*P\s\+.*$/
-syntax match projectInactive /^\s*p\s\+/
-syntax match reminderActive /\v<R\d{4}-\d{2}-\d{2}>/
-syntax match reminderInactive /\v<r\d{4}-\d{2}-\d{2}>/
-syntax match scheduleActive /\v<S\d{4}-\d{2}-\d{2}>/
-syntax match scheduleInactive /\v<s\d{4}-\d{2}-\d{2}>/
-syntax match waitingOn /%\w\+/
+syntax case ignore
 
-hi def link context Special
-hi def link deadline Constant
-hi def link done Type
-hi def link inbox Todo
-hi def link lint Todo
-hi def link nextActive Conditional
-hi def link nextInactive Conditional
-hi def link outcome Conditional
-hi def link projectActive Conditional
-hi def link projectInactive Conditional
-hi def link reminderActive Todo
-hi def link reminderInactive Constant
-hi def link scheduleActive Todo
-hi def link scheduleInactive Constant
-hi def link waitingOn Preproc
+" Machine comments 
+syntax match TodoMachineComment /^:.*$/
+syntax match TodoWarning /WARN/
+syntax match TodoError /ERR/
+
+" Human comments 
+syntax match TodoHumanComment /^;.*$/
+
+" Projects 
+syntax match TodoProject /^p\s/
+
+" Next Actions
+syntax match TodoNextAction /^\s*[>#]\s/
+
+" Outcomes
+syntax match TodoOutcome /^\s*o\s/
+
+" Waiting-on tags
+syntax match TodoWaitingOn /%[a-zA-Z0-9_]\+/
+
+" Start dates: >YYYY-MM-DD
+syntax match TodoStartDate />\d\{4}-\d\{2}-\d\{2}/
+
+" Due dates: !YYYY-MM-DD
+syntax match TodoDueDate /!\d\{4}-\d\{2}-\d\{2}/
+
+" Reminder dates: ^YYYY-MM-DD
+syntax match TodoReminderDate /\^\d\{4}-\d\{2}-\d\{2}/
+
+" Someday/Maybe
+syntax match TodoSomeday /^&/
+
+" Context tags: @word
+syntax match TodoContext /@[a-zA-Z0-9_]\+/
+
+" Set highlight groups
+highlight link TodoMachineComment Comment
+highlight link TodoHumanComment Comment
+highlight link TodoProject Identifier
+highlight link TodoNextAction Statement
+highlight link TodoOutcome Type
+highlight link TodoWaitingOn Constant
+highlight link TodoStartDate PreProc
+highlight link TodoDueDate PreProc
+highlight link TodoReminderDate PreProc
+highlight link TodoSomeday Underlined
+highlight link TodoContext Special
+highlight link TodoWarning WarningMsg
+highlight link TodoError ErrorMsg
+
+let b:current_syntax = "dew"
+
