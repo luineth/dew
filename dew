@@ -1,7 +1,11 @@
 #!/usr/bin/awk -f
 
+# USAGE: pipe your to.dew list to this executable. If the .vim files are
+# installed, use <leader>f from within a .dew file, or, run :%! path/to/dew
+# to filter in place.
+
 BEGIN {
-    # Grab today's date YYYYMMDD
+    # grab today's date YYYYMMDD
     "date +%Y%m%d" | getline today
     close("date +%Y%m%d")
 
@@ -21,7 +25,7 @@ BEGIN {
 }
 
 
-# Trim multiple blank lines
+# trim multiple blank lines
 !NF {
     if (prev_line_is_blank) next
     prev_line_is_blank =1
@@ -31,9 +35,9 @@ NF {
     prev_line_is_blank = 0
 }
 
-
-/^\?/   { output["inbox"][++output_n["inbox"]] = $0; next }
-/^&/    { output["someday"][++output_n["someday"]] = $0; next }
+# directly cache to inbox and someday to their respective output sections
+/^\?/ { output["inbox"][++output_n["inbox"]] = $0; next }
+/^&/ { output["someday"][++output_n["someday"]] = $0; next }
 
 /^#/   { header[++header_n] = $0; next }
 /^~/    { done[++done_n] = $0; next }
@@ -106,7 +110,7 @@ function blockprint(section, lint) {
     # store any warning
     if (lint) output[section][++output_n[section]] = lint
     
-    # transfer a project block to its output section
+    # transfer project block to its output section
     for (i = 1; i <= header_n; i++) {
         output[section][++output_n[section]] = header[i]
     }

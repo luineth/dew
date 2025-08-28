@@ -1,3 +1,4 @@
+" copy/symlink to $HOME/.vim/syntax/dew.vim
 if exists("b:current_syntax")
   finish
 endif
