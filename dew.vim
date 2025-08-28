@@ -2,57 +2,41 @@ if exists("b:current_syntax")
   finish
 endif
 
-syntax case ignore
+colorscheme evening
 
-" Machine comments 
-syntax match TodoMachineComment /^:.*$/
-syntax match TodoWarning /WARN/
-syntax match TodoError /ERR/
+" Define keystone characters at start of line
+syn match todoInbox "^?"
+syn match todoSomeday "^&"
+syn match todoScheduled "^\$"
+syn match todoWaiting "^%"
+syn match todoMachineComment "^:.*"
 
-" Human comments 
-syntax match TodoHumanComment /^;.*$/
+" Define lines
+syn match todoActiveLine "^>.*$" contains=todoDate,todoContext
+syn match todoScheduledLine "^\$.*" contains=todoScheduled,todoDate,todoContext
+syn match todoHeaderLine "^#.*"
+syn match todoDoneLine "^\~.*"
+" Highlight dates in workable (active) items only
+syn match todoDate "\d\{4\}-\d\{2\}-\d\{2\}" contained
+"syn match todoActiveLine "^>.*$" contains=todoActive,todoDate,todoContext,todoLint
 
-" Projects 
-syntax match TodoProject /^p\s/
+" Context tags (@context)
+syn match todoContext "@\w\+" contained
 
-" Next Actions
-syntax match TodoNextAction /^\s*[>#]\s/
+" Lint warnings (:!WORD)
+syn match todoLint ":!.*" 
 
-" Outcomes
-syntax match TodoOutcome /^\s*o\s/
-
-" Waiting-on tags
-syntax match TodoWaitingOn /%[a-zA-Z0-9_]\+/
-
-" Start dates: >YYYY-MM-DD
-syntax match TodoStartDate />\d\{4}-\d\{2}-\d\{2}/
-
-" Due dates: !YYYY-MM-DD
-syntax match TodoDueDate /!\d\{4}-\d\{2}-\d\{2}/
-
-" Reminder dates: ^YYYY-MM-DD
-syntax match TodoReminderDate /\^\d\{4}-\d\{2}-\d\{2}/
-
-" Someday/Maybe
-syntax match TodoSomeday /^&/
-
-" Context tags: @word
-syntax match TodoContext /@[a-zA-Z0-9_]\+/
-
-" Set highlight groups
-highlight link TodoMachineComment Comment
-highlight link TodoHumanComment Comment
-highlight link TodoProject Identifier
-highlight link TodoNextAction Statement
-highlight link TodoOutcome Type
-highlight link TodoWaitingOn Constant
-highlight link TodoStartDate PreProc
-highlight link TodoDueDate PreProc
-highlight link TodoReminderDate PreProc
-highlight link TodoSomeday Underlined
-highlight link TodoContext Special
-highlight link TodoWarning WarningMsg
-highlight link TodoError ErrorMsg
+" Define highlight groups
+hi def link todoInbox Special
+hi def link todoSomeday Identifier  
+hi def link todoHeaderLine Title
+hi def link todoDoneLine Comment
+hi def link todoActiveLine Keyword
+hi def link todoScheduled Constant
+hi def link todoWaiting Type
+hi def link todoMachineComment Preproc
+hi def link todoDate Number
+hi def link todoContext Tag
+hi def link todoLint Error
 
 let b:current_syntax = "dew"
-

@@ -1,169 +1,164 @@
 #!/usr/bin/awk -f
 
 BEGIN {
+    # Grab today's date YYYYMMDD
+    "date +%Y%m%d" | getline today
+    close("date +%Y%m%d")
 
-    "date +%Y-%m-%d" | getline today
-    close("date +%Y-%m-%d")
-
-    inProject = 0
-    hasWorkableAction = 0
-    inboxLines = 0
-    todoLines = 0
-
-    lintCount = 0
+    date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
 }
 
-function isfuture(date, today) { return (date > today) }
+# skip stray one-character lines
+/^\S\s*$/ { next }
 
-function cacheInbox(line) {
-    inbox[inboxLines] = inbox[inboxLines] line
-    inboxLines ++
+# skip machine comments
+/^:/ { next }
+
+# strip leading and trailing whitespace
+{
+    sub(/^[ \t]+/, "", $0)
+    sub(/[ \t]+$/, "", $0)
 }
 
-function cacheTodos(line, prefix) {
-    if(indented)
-        todos[todoLines] = todos[todoLines] "    "
-    
-    todos[todoLines] = todos[todoLines] prefix " "
-    sub(/^[ \t]+/, "", line)
 
-    if(prefix) {
-        todos[todoLines] = todos[todoLines] substr($0, index($0, $2))
-    } else {
-        todos[todoLines] = todos[todoLines] " " line
-    }
-    todoLines++
-
+# Trim multiple blank lines
+!NF {
+    if (prev_line_is_blank) next
+    prev_line_is_blank =1
 }
 
-function lint(message) {
-    cacheTodos(message, ":")
-    lintCount++
+NF {
+    prev_line_is_blank = 0
 }
 
-# Skip machine comments
-$1 == ":" { next }
 
-# Skip blank lines
-!NF { next }
+/^\?/   { output["inbox"][++output_n["inbox"]] = $0; next }
+/^&/    { output["someday"][++output_n["someday"]] = $0; next }
 
-# Match dangling waiting on tasks
-/%.+\y/ && $1 != "?" && $1 != "x"{
-    supressingDate = 0
-    for (i = 1; i <= NF; i++) {
-        if (match($i, /[>\^][0-9]{4}-[0-9]{2}-[0-9]{2}/)) {
-            supressingDate = 1
-            break
-        }
-    }
+/^#/   { header[++header_n] = $0; next }
+/^~/    { done[++done_n] = $0; next }
 
-    if (!supressingDate)
-        lint("ERR: Tag requires follow-up date")
+# prepend "> " to any due reminder dates,
+# excluding inactive statuses recorded above^
+$0 ~ date_regex {
+    match($0, date_regex)
+    date_string = substr($0, RSTART, RLENGTH)
+    gsub("-", "", date_string) # YYYY-MM-DD to YYYYMMDD
+
+    if(date_string <= today && $0 !~ /^>/) # don't double up on ">"
+        $0 = ">" $0
 }
 
-# Record contexs
-/@.+\y/ {
+# record contexs from workable tasks
+/^>.*@.+/ {
     for(i = 1; i <= NF; i++) {
         if(match($i, /^@.+$/)) {
-            if (!( $i in contexts ))
-                contexts[$i] = 0
             contexts[$i]++
         }
     }
 }
 
-# Project block init
-$1 == "p" {
-    if (indented)
-        lint("ERR: Nested project")
-    
-    hasNextAction = 0
+/^>/    { workable[++workable_n] = $0; next }
 
-    cacheTodos($0, "p")
-    indented = 1
-    next
+# lint any scheduled or waiting-for tasks w/o follow up dates
+(/^\$/ || /^%/) && $0 !~ /[0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+    $0 = $0 "\n:! DATE"
 }
 
-# Inbox Items
-$1 == "?" {
-    cacheInbox($0)
-    next
+/^\$/ { scheduled[++scheduled_n] = $0; next }
+
+/^%/ {
+    waiting_on[$1]++
+    waiting[++waiting_n] = $0
 }
 
-# Someday/Maybe
-$1 == "&" {
-    if(indented)
-        lint("ERR: Someday item in a project")
-    cacheTodos($0, "&") 
+# any non-matched items: indented then cached
+NF {
+    $0 = "  " $0
+    blocked[++blocked_n] = $0
     next
-}
-
-# Project block end
-$1 == "o" {
-    if (!indented)
-        lint("ERR: Unmatched outcome")
-
-    if (!hasNextAction)
-        lint("ERR: Project block without next action")
-    
-    cacheTodos($0, "o")
-    indented = 0
-    next
-
-}
-
-# Next actions
-$1 == ">" || $1 == "#" {
-    hasNextAction = 1
-    workable = 1
-    if (match($i, /^>[0-9]{4}-[0-9]{2}-[0-9]{2}$/)) {
-        if (isfuture(substr($i, 2, 10), today)) {
-        workable = 0
-        }
     }
 
-    cacheTodos($0, (workable ? ">" : "#"))
+# line must be blank to continue:
+
+workable_n {
+    blockprint("active")
     next
 }
 
-# Human comments
-$1 == ";" {
-    cacheTodos($0, ";")
+waiting_n || scheduled_n {
+    blockprint("inactive")
     next
 }
 
-# Completed actions
-$1 == "x" {
-    cacheTodos($0, "x")
+blocked_n {
+    blockprint("active", ":! BLOCKED")
     next
 }
 
+# only done or headers:
 {
-    # Blocked Actions
-    if(indented) {
-        cacheTodos($0, "")
-        todoLines++
-        next
-    }
-
-    # Treat remaining unmatched as inbox
-    cacheInbox("? " $0)
+    blockprint("completed")
     next
 }
+
+function blockprint(section, lint) {
+    # store any warning
+    if (lint) output[section][++output_n[section]] = lint
+    
+    # transfer a project block to its output section
+    for (i = 1; i <= header_n; i++) {
+        output[section][++output_n[section]] = header[i]
+    }
+    for (i = 1; i <= done_n; i++) {
+        output[section][++output_n[section]] = done[i]
+    }
+    for (i = 1; i <= workable_n; i++) {
+        output[section][++output_n[section]] = workable[i]
+    }
+    for (i = 1; i <= waiting_n; i++) {
+        output[section][++output_n[section]] = waiting[i]
+    }
+    for (i = 1; i <= scheduled_n; i++) {
+        output[section][++output_n[section]] = scheduled[i]
+    }
+    for (i = 1; i <= blocked_n; i++) {
+        output[section][++output_n[section]] = blocked[i]
+    }
+    output[section][++output_n[section]] = ""
+
+
+    # flush project block cache
+    delete header
+    delete done
+    delete workable
+    delete waiting
+    delete scheduled
+    delete blocked
+    header_n = done_n = workable_n = waiting_n = scheduled_n = blocked_n = 0
+}
+
 
 END {
 
-    print ": Inbox:", inboxLines
-    print ": Lints:", lintCount
+    print ": Inbox:", output_n["inbox"]
     print ": Context counts:"
     for (i in contexts)
-        print ":      " i ": " contexts[i]
+        print ":\t" i ": " contexts[i]
+    printf("\n")
 
-    for ( i in inbox ) {
-        printf "%s\n", inbox[i]
-    }
+    output_section[1] = "inbox"
+    output_section[2] = "active"
+    output_section[3] = "inactive"
+    output_section[4] = "someday"
+    output_section[5] = "completed"
 
-    for ( i in todos ) {
-        printf "%s\n", todos[i]
+    for( i = 1; i <= 5; i++) {
+        sec = output_section[i]
+        print ""
+        print ": " sec
+        for(j = 1; j <= output_n[sec]; j++) {
+            print output[sec][j]
+        }
     }
 }
