@@ -10,6 +10,7 @@ BEGIN {
     close("date +%Y%m%d")
 
     date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    cron_regex = "{([,-/*0-9]+ ){2}[L#,-/*0-9]+}"
 }
 
 # skip stray one-character lines
@@ -40,6 +41,31 @@ NF {
 /^&/ { output["someday"][++output_n["someday"]] = $0; next }
 
 /^#/   { header[++header_n] = $0; next }
+
+# handle cron-like repeats
+# {* * *} syntax, omitting hours and minutes
+$0 ~ cron_regex && /^~/ {
+    match($0, cron_regex)
+    cron_string = substr($0, RSTART, RLENGTH)
+    gsub(/[{}]/, "", cron_string)
+
+    done[++done_n] = $0 # store existing line
+
+    sub(/^~/, "$", $0)
+    gsub(date_regex, "", $0)
+
+    new_date = cron_calc(today, "0 0 " cron_string)
+    if (new_date != "0") {
+        $0 = $0 " " new_date
+    } else {
+        $0 = $0 "\n:!CRON ERROR"
+    }
+    scheduled[++scheduled_n] = $0
+    next
+}
+
+
+
 /^~/    { done[++done_n] = $0; next }
 
 # prepend "> " to any due reminder dates,
@@ -165,4 +191,24 @@ END {
             print output[sec][j]
         }
     }
+}
+
+
+function cron_calc(date_str, cron_expr,	cmd, result) {
+    cmd = "python3 -c '"
+    cmd = cmd "from croniter import croniter\n"
+    cmd = cmd "from datetime import datetime\n"
+    cmd = cmd "import sys\n"
+    cmd = cmd "try:\n"
+    cmd = cmd "    base = datetime.strptime(\"" date_str "\", \"%Y%m%d\")\n"
+    cmd = cmd "    itr = croniter(\"" cron_expr "\", base)\n"
+    cmd = cmd "    print(itr.get_next(datetime).strftime(\"%Y-%m-%d\"))\n"
+    cmd = cmd "except Exception:\n"
+    cmd = cmd "    print(\"0\")\n"
+    cmd = cmd "'"
+
+	cmd | getline result
+	close(cmd)
+
+	return result
 }
