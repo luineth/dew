@@ -6,11 +6,12 @@
 
 BEGIN {
     # grab today's date YYYYMMDD
-    "date +%Y%m%d" | getline today
-    close("date +%Y%m%d")
+    "date +%F" | getline today
+    close("date +%F")
 
     date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
     cron_regex = "{([,-/*0-9]+ ){2}[L#,-/*0-9]+}"
+    repeat_regex = "{[0-9]+}"
 }
 
 # skip stray one-character lines
@@ -44,17 +45,17 @@ NF {
 
 # handle cron-like repeats
 # {* * *} syntax, omitting hours and minutes
-$0 ~ cron_regex && /^~/ {
+$0 ~ cron_regex && /^~.*[^~]$/ {
     match($0, cron_regex)
     cron_string = substr($0, RSTART, RLENGTH)
     gsub(/[{}]/, "", cron_string)
 
-    done[++done_n] = $0 # store existing line
+    done[++done_n] = $0 "~" # store inactivated line
 
     sub(/^~/, "$", $0)
     gsub(date_regex, "", $0)
 
-    new_date = cron_calc(today, "0 0 " cron_string)
+    new_date = cron_offset(today, "0 0 " cron_string)
     if (new_date != "0") {
         $0 = $0 " " new_date
     } else {
@@ -64,19 +65,34 @@ $0 ~ cron_regex && /^~/ {
     next
 }
 
+# handle simple repeats
+# {#} syntax, integer with number of days frequency
+$0 ~ repeat_regex && /^~.*[^~]$/ {
+    match($0, repeat_regex)
+    repeat_string = substr($0, RSTART, RLENGTH)
+    gsub(/[{}]/, "", repeat_string)
+
+    done[++done_n] = $0 "~" # store inactivated line
+
+    sub(/^~/, "$", $0)
+    gsub(date_regex, "", $0)
+
+    new_date = date_offset(today, repeat_string)
+    $0 = $0 " " new_date
+    scheduled[++scheduled_n] = $0
+    next
+}
 
 
 /^~/    { done[++done_n] = $0; next }
 
 # prepend "> " to any due reminder dates,
-# excluding inactive statuses recorded above^
 $0 ~ date_regex {
     match($0, date_regex)
     date_string = substr($0, RSTART, RLENGTH)
-    gsub("-", "", date_string) # YYYY-MM-DD to YYYYMMDD
 
-    if(date_string <= today && $0 !~ /^>/) # don't double up on ">"
-        $0 = ">" $0
+    if(date_string <= today)
+        sub(/^[\$%]/, ">", $0) # only activate due $ or %
 }
 
 # record contexs from workable tasks
@@ -91,7 +107,7 @@ $0 ~ date_regex {
 /^>/    { workable[++workable_n] = $0; next }
 
 # lint any scheduled or waiting-for tasks w/o follow up dates
-(/^\$/ || /^%/) && $0 !~ /[0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+(/^\$/ || /^%/) && $0 !~ date_regex {
     $0 = $0 "\n:! DATE"
 }
 
@@ -194,13 +210,13 @@ END {
 }
 
 
-function cron_calc(date_str, cron_expr,	cmd, result) {
+function cron_offset(date_str, cron_expr,	cmd, result) {
     cmd = "python3 -c '"
     cmd = cmd "from croniter import croniter\n"
     cmd = cmd "from datetime import datetime\n"
     cmd = cmd "import sys\n"
     cmd = cmd "try:\n"
-    cmd = cmd "    base = datetime.strptime(\"" date_str "\", \"%Y%m%d\")\n"
+    cmd = cmd "    base = datetime.strptime(\"" date_str "\", \"%Y-%m-%d\")\n"
     cmd = cmd "    itr = croniter(\"" cron_expr "\", base)\n"
     cmd = cmd "    print(itr.get_next(datetime).strftime(\"%Y-%m-%d\"))\n"
     cmd = cmd "except Exception:\n"
@@ -211,4 +227,13 @@ function cron_calc(date_str, cron_expr,	cmd, result) {
 	close(cmd)
 
 	return result
+}
+
+function date_offset(date_str, offset,  cmd, result) { 
+    cmd = "date -d \"" date_str " " ((offset >=0) ? "+" offset : offset) " days\" +%F"
+
+    cmd | getline result
+    close(cmd)
+
+    return result
 }
