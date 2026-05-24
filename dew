@@ -1,7 +1,7 @@
-#!/usr/bin/awk -f
+#!/usr/bin/gawk -f
 
 # USAGE: pipe your to.dew list to this executable. If the .vim files are
-# installed, use <leader>f from within a .dew file, or, run :%! path/to/dew
+# installed, use <local leader> + f from within a .dew file, or, run :%! path/to/dew
 # to filter in place.
 
 BEGIN {
@@ -10,8 +10,9 @@ BEGIN {
     close("date +%F")
 
     date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
-    cron_regex = "{([,-/*0-9]+ ){2}[L#,-/*0-9]+}"
-    repeat_regex = "{[0-9]+}"
+    rel_repeat_regex = "{[0-9]}"
+    dow_repeat_regex = "{(sun|mon|tue|wed|thu|fri|sat)}"
+    month_repeat_regex = "{(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)}"
 }
 
 # skip stray one-character lines
@@ -27,7 +28,7 @@ BEGIN {
 }
 
 
-# trim multiple blank lines
+# collapse multi-line spacing
 !NF {
     if (prev_line_is_blank) next
     prev_line_is_blank =1
@@ -43,39 +44,19 @@ NF {
 
 /^#/   { header[++header_n] = $0; next }
 
-# handle cron-like repeats
-# {* * *} syntax, omitting hours and minutes
-$0 ~ cron_regex && /^~.*[^~]$/ {
-    match($0, cron_regex)
-    cron_string = substr($0, RSTART, RLENGTH)
-    gsub(/[{}]/, "", cron_string)
-
-    done[++done_n] = $0 "~" # store inactivated line
-
-    sub(/^~/, "$", $0)
-    gsub(date_regex, "", $0)
-
-    new_date = cron_offset(today, "0 0 " cron_string)
-    if (new_date != "0") {
-        $0 = $0 " " new_date
-    } else {
-        $0 = $0 "\n:!CRON ERROR"
-    }
-    scheduled[++scheduled_n] = $0
-    next
-}
 
 # handle simple repeats
 # {#} syntax, integer with number of days frequency
-$0 ~ repeat_regex && /^~.*[^~]$/ {
-    match($0, repeat_regex)
+$0 ~ rel_repeat_regex && /^~.*[^~]$/ {
+    # extract inner value from braces
+    match($0, rel_repeat_regex)
     repeat_string = substr($0, RSTART, RLENGTH)
     gsub(/[{}]/, "", repeat_string)
 
-    done[++done_n] = $0 "~" # store inactivated line
+    done[++done_n] = $0 "~" # store canceled line
 
     sub(/^~/, "$", $0)
-    gsub(date_regex, "", $0)
+    gsub(date_regex, "", $0) # delete old schedule date
 
     new_date = date_offset(today, repeat_string)
     $0 = $0 " " new_date
@@ -106,7 +87,7 @@ $0 ~ date_regex {
 
 /^>/    { workable[++workable_n] = $0; next }
 
-# lint any scheduled or waiting-for tasks w/o follow up dates
+# lint any scheduled or delegated tasks w/o follow up dates
 (/^\$/ || /^%/) && $0 !~ date_regex {
     $0 = $0 "\n:! DATE"
 }
@@ -114,8 +95,8 @@ $0 ~ date_regex {
 /^\$/ { scheduled[++scheduled_n] = $0; next }
 
 /^%/ {
-    waiting_on[$1]++
-    waiting[++waiting_n] = $0
+    delegated_to[$1]++
+    delegated[++delegated_n] = $0
 }
 
 # any non-matched items: indented then cached
@@ -126,27 +107,25 @@ NF {
     }
 
 # line must be blank to continue:
+# blanks are implicit end of project
 
 workable_n {
-    blockprint("active")
+    blockprint("live")
     next
 }
 
-waiting_n || scheduled_n {
+delegated_n || scheduled_n {
     blockprint("inactive")
     next
 }
 
 blocked_n {
-    blockprint("active", ":! BLOCKED")
+    blockprint("live", ":! BLOCKED")
     next
 }
 
 # only done or headers:
-{
-    blockprint("completed")
-    next
-}
+{ blockprint("completed") }
 
 function blockprint(section, lint) {
     # store any warning
@@ -162,8 +141,8 @@ function blockprint(section, lint) {
     for (i = 1; i <= workable_n; i++) {
         output[section][++output_n[section]] = workable[i]
     }
-    for (i = 1; i <= waiting_n; i++) {
-        output[section][++output_n[section]] = waiting[i]
+    for (i = 1; i <= delegated_n; i++) {
+        output[section][++output_n[section]] = delegated[i]
     }
     for (i = 1; i <= scheduled_n; i++) {
         output[section][++output_n[section]] = scheduled[i]
@@ -178,10 +157,10 @@ function blockprint(section, lint) {
     delete header
     delete done
     delete workable
-    delete waiting
+    delete delegated
     delete scheduled
     delete blocked
-    header_n = done_n = workable_n = waiting_n = scheduled_n = blocked_n = 0
+    header_n = done_n = workable_n = delegated_n = scheduled_n = blocked_n = 0
 }
 
 
@@ -194,7 +173,7 @@ END {
     printf("\n")
 
     output_section[1] = "inbox"
-    output_section[2] = "active"
+    output_section[2] = "ready"
     output_section[3] = "inactive"
     output_section[4] = "someday"
     output_section[5] = "completed"
@@ -209,25 +188,6 @@ END {
     }
 }
 
-
-function cron_offset(date_str, cron_expr,	cmd, result) {
-    cmd = "python3 -c '"
-    cmd = cmd "from croniter import croniter\n"
-    cmd = cmd "from datetime import datetime\n"
-    cmd = cmd "import sys\n"
-    cmd = cmd "try:\n"
-    cmd = cmd "    base = datetime.strptime(\"" date_str "\", \"%Y-%m-%d\")\n"
-    cmd = cmd "    itr = croniter(\"" cron_expr "\", base)\n"
-    cmd = cmd "    print(itr.get_next(datetime).strftime(\"%Y-%m-%d\"))\n"
-    cmd = cmd "except Exception:\n"
-    cmd = cmd "    print(\"0\")\n"
-    cmd = cmd "'"
-
-	cmd | getline result
-	close(cmd)
-
-	return result
-}
 
 function date_offset(date_str, offset,  cmd, result) { 
     cmd = "date -d \"" date_str " " ((offset >=0) ? "+" offset : offset) " days\" +%F"
