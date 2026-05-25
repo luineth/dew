@@ -12,17 +12,17 @@ BEGIN {
     "date +%F" | getline today
     close("date +%F")
 
-    date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    DATE_PATTERN = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
 
     # gawk infers initial plus is literal
-    duration = "[0-9]+(d|w|m|y)"
-    weekday = "(sun|mon|tue|wed|thu|fri|sat)"
+    DURATION_PATTERN = "[0-9]+(d|w|m|y)"
+    WEEKDAY_PATTERN = "(sun|mon|tue|wed|thu|fri|sat)"
 
-    defer_regex = "(>" duration "|>" weekday ")"
+    DEFER_PATTERN = "(>" DURATION_PATTERN "|>" WEEKDAY_PATTERN ")\\>"
 
-    repeat_duration = "+{1,2}" duration
-    repeat_weekday = "+{2}" weekday # only relative repeats supported
-    repeat_regex = "(" repeat_duration "|" repeat_weekday ")"
+    REPEAT_DURATION_PATTERN = "+{1,2}" DURATION_PATTERN
+    REPEAT_WEEKDAY_PATTERN = "+{2}" WEEKDAY_PATTERN # only relative repeats supported
+    REPEAT_PATTERN = "(" REPEAT_DURATION_PATTERN "|" REPEAT_WEEKDAY_PATTERN ")\\>"
 }
 
 ## Cleanup
@@ -43,18 +43,17 @@ BEGIN {
 NF { prev_line_is_blank = 0 }
 
 # Defer macro
-$0 ~ defer_regex {
-    match($0, defer_regex)
-    defer_expr = substr($0, RSTART, RLENGTH)
+$0 ~ DEFER_PATTERN {
+    defer_expr = extract(DEFER_PATTERN, $0)
     gsub(/>/, "", defer_expr)
-    if (defer_expr ~ weekday)
+    if (defer_expr ~ WEEKDAY_PATTERN)
         new_date = dow_offset(defer_expr)
     else
         new_date = duration_offset(today, defer_expr)
 
-    sub(defer_regex, new_date, $0)
+    sub(DEFER_PATTERN, new_date, $0)
     # kill any duplicates, only leftmost expr processed
-    gsub(defer_regex, "", $0)
+    gsub(DEFER_PATTERN, "", $0)
 }
 
 ## Special sections
@@ -67,22 +66,19 @@ $0 ~ defer_regex {
 /^#/   { header[++header_n] = $0; next }
 
 # repeat handler
-$0 ~ repeat_regex && /^~.+[^~]$/ {
+$0 ~ REPEAT_PATTERN && /^~.+[^~]$/ {
 
-    # no crossing streams
-    if ($0 ~ repeat_weekday && $0 ~ repeat_duration) {
+    # pick a lane
+    if ($0 ~ REPEAT_WEEKDAY_PATTERN && $0 ~ REPEAT_DURATION_PATTERN) {
         $0 = $0 "\n:! Duration and weekday repeats are mutually exclusive: e.g. ++tue ^ +1w"
         lints++
         done[++done_n] = $0 # keepline w/ warning in place
         next
     }
 
-    # extract leftmost repeat expression;
-    # syntax highlights only leftmost
-    match($0, repeat_regex)
-    repeat_expr = substr($0, RSTART, RLENGTH)
+    repeat_expr = extract(REPEAT_PATTERN, $0)
 
-    if (repeat_expr ~ repeat_weekday) {
+    if (repeat_expr ~ REPEAT_WEEKDAY_PATTERN) {
         # never anchored repeat
         gsub(/+/, "", repeat_expr)
         new_date = dow_offset(repeat_expr)
@@ -91,10 +87,8 @@ $0 ~ repeat_regex && /^~.+[^~]$/ {
 
         repeat_from = today #default, unless...
         # date available & anchored repeat
-        if ($0 ~ date_regex && repeat_expr !~ /+{2}/) {
-            match($0, date_regex)
-            repeat_from = substr($0, RSTART, RLENGTH)
-        }
+        if ($0 ~ DATE_PATTERN && repeat_expr !~ /+{2}/)
+            repeat_from = extract(DATE_PATTERN,$0)
 
         gsub(/+/, "", repeat_expr)
         new_date = duration_offset(repeat_from, repeat_expr)
@@ -104,14 +98,14 @@ $0 ~ repeat_regex && /^~.+[^~]$/ {
     done[++done_n] = $0 "~"
 
     sub(/^~/, "$") # activate
-    gsub(date_regex, "") # delete any old dates
+    gsub(DATE_PATTERN, "") # delete any old dates
     $0 = $0 " " new_date
     # fall through
 }
 
 /^~/ { done[++done_n] = $0; next }
 
-/^[%$]/ && $0 !~ date_regex {
+/^[%$]/ && $0 !~ DATE_PATTERN {
     $0 = $0 "\n:! No follow-up date assigned.\n: Assign one with YYYY-MM-DD or a shortcut, e.g. (>2w)."
     lints++
 }
@@ -127,18 +121,16 @@ $0 ~ repeat_regex && /^~.+[^~]$/ {
 
 
 # activate any due dates
-/^[%$]/ && $0 ~ date_regex {
-    match($0, date_regex)
-    date_string = substr($0, RSTART, RLENGTH)
+/^[%$]/ && $0 ~ DATE_PATTERN {
+    date_string = extract(DATE_PATTERN, $0)
 
     if(date_string <= today)
         $0 = ">" $0
 }
 
 # downgrade deferred next actions
-/^>/ && $0 ~ date_regex {
-    match($0, date_regex)
-    date_string = substr($0, RSTART, RLENGTH)
+/^>/ && $0 ~ DATE_PATTERN {
+    date_string = extract(DATE_PATTERN, $0)
 
     if(date_string > today)
         sub(/>/, "$", $0)
@@ -147,7 +139,7 @@ $0 ~ repeat_regex && /^~.+[^~]$/ {
 /^\$/ { scheduled[++scheduled_n] = $0; next }
 /^%/  { delegated[++delegated_n] = $0; next }
 
-# record contexs from next tasks
+# record contexts from next tasks
 /^>.*@.+/ {
     for(i = 1; i <= NF; i++) {
         if(match($i, /^@.+$/)) {
@@ -291,4 +283,10 @@ function dow_offset(dow,  cmd, result) {
     cmd | getline result
     close(cmd)
     return result
+}
+
+function extract(pattern, string) {
+    if (match(string, pattern))
+        return substr(string, RSTART, RLENGTH)
+    return ""
 }

@@ -17,11 +17,11 @@ syn match todoMachineComment "^:.*"
 syn match todoActiveLine "^>.*$" contains=todoDate, todoContext, todoRepeat
 syn match todoScheduledLine "^\$.*" contains=todoScheduled, todoDate, todoContext, todoRepeat
 syn match todoHeaderLine "^#.*"
-syn match todoDoneLine "^\~.*"
+syn match todoDoneLine "^\~.*" contains=todoRepeat
 
 " Highlight dates/repeats in workable (active) items only
 syn match todoDate "\d\{4\}-\d\{2\}-\d\{2\}" contained
-syn match todoRepeat "\v((\+{1,2}|\>)\d+(d|w|m|y)|(\+{2}|\>)(sun|mon|tue|wed|thu|fri|sat))" contained
+syn match todoRepeat "\v((\+{1,2}|\>)\d+(d|w|m|y)|(\+{2}|\>)(sun|mon|tue|wed|thu|fri|sat))>" contained
 
 " Context tags (@context)
 syn match todoContext "@\w\+" contained
