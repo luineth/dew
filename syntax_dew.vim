@@ -21,7 +21,7 @@ syn match todoDoneLine "^\~.*"
 
 " Highlight dates/repeats in workable (active) items only
 syn match todoDate "\d\{4\}-\d\{2\}-\d\{2\}" contained
-" Oh God...
+" Oh God... this needs to be fixed to elimitate abbreviated weekdays
 syn match todoRepeat "[+]\?\[ *\%(\%([0-9]\+ \+\)\?\%(day\|week\|month\|year\)s\?\%( \+\%([0-9]\+ \+\)\?\%(day\|week\|month\|year\)s\?\)*\|\%(sun\|mon\|tue\%(s\)\?\|thu\%(rs\)\?\|fri\)\%(day\)\?\|\%(wed\%(nesday\)\?\)\|\%(sat\%(urday\)\?\)\) *\]" contained
 
 " Context tags (@context)

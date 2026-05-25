@@ -1,4 +1,4 @@
-#!/usr/bin/awk -f
+#!/usr/bin/gawk -f
 
 # USAGE: pipe your to.dew list to this executable.
 # If the .vim files are installed, use <local leader> + f
@@ -11,9 +11,12 @@ BEGIN {
     close("date +%F")
 
     date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
+
+    duration = "([0-9]+ +)?(day|week|month|year)s?"
+    weekday = "(sun|mon|tues|wednes|thurs|fri|satur)day"
     # load-bearing regular expression
-    repeat_regex = "+?[[] *(([0-9]+ +)?(day|week|month|year)s?( +([0-9]+ +)?(day|week|month|year)s?)*|(sun|mon|tue(s)?|thu(rs)?|fri)(day)?|(wed(nesday)?)|(sat(urday)?)) *]"
-}
+    repeat_regex = "+?[[] *(" duration "( +" duration ")*|" weekday ") *]"
+    }
 
 ## Cleanup
 # strip leading and trailing whitespace
@@ -43,27 +46,50 @@ NF { prev_line_is_blank = 0 }
 
 # repeat handler
 $0 ~ repeat_regex && /^~.+[^~]$/ {
-    # store cancelled task and change status
-    done[++done_n] = $0 "~"
-    sub(/^~/, "$")
+
 
     # extract repeat expression
     match($0, repeat_regex)
     repeat_expr = substr($0, RSTART, RLENGTH)
-    
-    # Repeat from last scheduled date if it's available AND
-    # We're not relative repeating (e.g. +[3 days])
-    if ($0 ~ date_regex && repeat_expr ~ /^[^+]/) {
+    if (repeat_expr ~ /^+/)
+        anchored_repeat = 0
+    else
+        anchored_repeat = 1
+
+    repeat_from = today #default, unless...
+    if (anchored_repeat) {
         match($0, date_regex)
         repeat_from = substr($0, RSTART, RLENGTH)
-    } else {
-        repeat_from = today
     }
 
-    gsub(/[\+\[\]]/, "", repeat_expr) # tidy for `date`
-    gsub(date_regex, "")
-    new_date = date_offset(repeat_from, repeat_expr)
+    if (repeat_expr ~ weekday && anchored_repeat) {
+        $0 = $0 "\n:! Day-of-week repeats must be relative: e.g. +[tuesday]"
+        lints++
+        done[++done_n] = $0 # keepline w/ warning in place
+        next
+    }
+
+    if (repeat_expr ~ weekday) {
+        match($0, weekday)
+        new_date = dow_offset(substr($0, RSTART, RLENGTH))
+    } else {
+        gsub(/[\+\[\]]/, "", repeat_expr) # tidy for `date`
+        new_date = duration_offset(repeat_from, repeat_expr)
+    }
+
+    # store cancelled task
+    done[++done_n] = $0 "~"
+
+    sub(/^~/, "$") # activate
+    gsub(date_regex, "") # delete any old date
     $0 = $0 " " new_date
+    # fall through
+}
+
+# don't let repeat typos silently fail
+$0 ~ /\[.*]/ && $0 !~ repeat_regex {
+    $0 = $0 "\n:! This looks like a malformed repeat expression."
+    lints++
 }
 
 
@@ -119,36 +145,70 @@ NF {
 # blanks are implicit end of project
 
 workable_n {
-    project_print("live")
+    project_cache("live")
     next
 }
 
 delegated_n || scheduled_n {
-    project_print("dormant")
+    project_cache("dormant")
     next
 }
 
+# no follow-up and not completed
 pending_n || (header_n && !done_n) {
-    project_print("live", ":! Project is stalled. Assign a next action or follow-up.")
+    project_cache("live", ":! Project is stalled. Assign a next action or follow-up.")
     lints++
     next
 }
 
 # only done tasks:
-{ project_print("completed") }
+{ project_cache("completed") }
 
-function project_print(section, lint) {
+END {
+    #inbox section isn't generated via project_cache(),
+    #so it needs a line feed to sep from later sections
+    output["inbox"][++output_n["inbox"]] = ""
+
+    if (lints)
+        print ": lints: " lints "\n: Search for ':!' to correct.\n"
+
+    print ": inbox:", output_n["inbox"]
+
+    print ": context counts:"
+    for (i in contexts)
+        print ":\t" i ": " contexts[i]
+    print ": delegated counts:"
+    for (i in delegated_to)
+        print ":\t" i ": " delegated_to[i]
+    printf("\n")
+
+    section[1] = "inbox"
+    section[2] = "live"
+    section[3] = "dormant"
+    section[4] = "someday"
+    section[5] = "completed"
+
+    for( i = 1; i <= 5; i++) {
+        sec = section[i]
+        print ": " section[i]
+        for(j = 1; j <= output_n[section[i]]; j++) {
+            print output[section[i]][j]
+        }
+    }
+}
+
+function project_cache(section, lint) {
     # store any lints
     if (lint)
         output[section][++output_n[section]] = lint
     
     # transfer project block to its output section
     append_section(section, header, header_n)
-    append_section(section, done, done_n)
     append_section(section, workable, workable_n)
     append_section(section, delegated, delegated_n)
     append_section(section, scheduled, scheduled_n)
     append_section(section, pending, pending_n)
+    append_section(section, done, done_n)
 
     output[section][++output_n[section]] = ""
 
@@ -172,38 +232,15 @@ function clear_project_cache() {
     header_n = done_n = workable_n = delegated_n = scheduled_n = pending_n = 0
 }
 
-END {
-    if (lints)
-        print ": lints: " lints "\n: Search for ':!' to correct.\n"
-
-    print ": inbox:", output_n["inbox"]
-
-    print ": context counts:"
-    for (i in contexts)
-        print ":\t" i ": " contexts[i]
-    print ": delegated counts:"
-    for (i in delegated_to)
-        print ":\t" i ": " delegated_to[i]
-    printf("\n")
-
-    output_section[1] = "inbox"
-    output_section[2] = "live"
-    output_section[3] = "dormant"
-    output_section[4] = "someday"
-    output_section[5] = "completed"
-
-    for( i = 1; i <= 5; i++) {
-        sec = output_section[i]
-        print ""
-        print ": " sec
-        for(j = 1; j <= output_n[sec]; j++) {
-            print output[sec][j]
-        }
-    }
+function duration_offset(repeat_from, repeat_expr,  cmd, result) {
+    cmd = "date -d '" repeat_from " +" repeat_expr "' +%F"
+    cmd | getline result
+    close(cmd)
+    return result
 }
 
-function date_offset(repeat_from, repeat_expr,  cmd, result) {
-    cmd = "date -d '" repeat_from " +" repeat_expr "' +%F"
+function dow_offset(dow,  cmd, result) {
+    cmd = "date -d '" dow "' +%F"
     cmd | getline result
     close(cmd)
     return result
