@@ -52,30 +52,36 @@ All delegated tasks must be guarded with a follow-up date. This represents a tim
 
 All other tasks are implicitly **pending**. Pending tasks are those which come later in the project and are blocked by other tasks. `dew` will indent pending tasks with a space, but is just cosmetic. Any non-reserved first characters give the take a pending status.
 
-Any task may contain a repetition cadence. They come in two flavors, absolute and relative. Absolute repeats are calculated from the last scheduled date, and relative repeats are calculated from today. For example:
+Any task may contain a repetition cadence. They come in two flavors, anchored and relative. Anchored repeats are calculated from the last scheduled date, and relative repeats are calculated from today. For example:
 
 ```
->deposit paycheck [2 weeks]
+>deposit paycheck +2w
 
->clean the stove +[month]
+>clean the stove ++1m
 ```
 
-You can read repeat expressions in your head as "every X." `[monday]` means "every monday". `+[week]` means "every week from today".
+You can read repeat expressions in your head as "every X." `+1m` means "every month". `++1w` means "every week from today".
 
-`dew` calculates repeated tasks after you mark them done. It will first "cancel" the done task by printing it with a final `~`, then it will create a new task with the following scheduled date.
+`dew` calculates repeated tasks after you mark them done. It will first "cancel" the done task by printing it with a final `~`, then it will create a new task with the subsequent scheduled date.
 
-Repetitions are calculated via the robust relative dating in GNU `date`. See that info page for more, but in short, these are some valid repeat expressions:
+Repetitions are calculated via GNU `date` from the coreutils. They begin with `+` for anchored repeats or `++` for relative repeats, then contain an integer and a duration:
 
-- `[wed]`
-- `[friday]`
-- `[day]`
-- `[2 weeks]`
-- `[ 1 month ]`
-- `[3 years 2 months 1 week 4 days]`
+| Sigil | Duration |
+| ---- | ---- |
+| `d` | day |
+| `w` | week |
+| `m` | month |
+| `y` | year |
 
-Plurals are ignored. Days of the week must be alone. All other dates can optionally take an integer and be combined. `date` allows from strange but perfectly valid expressions:
+Additionally, there are special relative repeats which occur on the following X day of the week from today. They use English three-letter abbreviations, e.g. `mon`, `tue`. These must begin with `++` and take no integer.
 
-- `[year month years months 2 day]` -> 2 years + 2 months + 2 days
+Some examples of valid repeat expressions:
+
+- `+1d` - every day
+- `++fri` - next Friday
+- `+2m` - every 2 months
+- `++3w` - 3 weeks from now
+- `+1y` - annually
 
 ### Project statuses
 

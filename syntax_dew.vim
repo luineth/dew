@@ -3,36 +3,35 @@ if exists("b:current_syntax")
   finish
 endif
 
-colorscheme evening
+colorscheme catppuccin
 
 " Define keystone characters at start of line
 syn match todoInbox "^?"
 syn match todoSomeday "^&"
 syn match todoScheduled "^\$"
-syn match todoWaiting "^%"
+syn match todoWaiting "^%\w\+"
 syn match todoMachineComment "^:.*"
 
 
 " Define lines
-syn match todoActiveLine "^>.*$" contains=todoDate,todoContext, todoRepeat
-syn match todoScheduledLine "^\$.*" contains=todoScheduled,todoDate,todoContext, todoRepeat
+syn match todoActiveLine "^>.*$" contains=todoDate, todoContext, todoRepeat
+syn match todoScheduledLine "^\$.*" contains=todoScheduled, todoDate, todoContext, todoRepeat
 syn match todoHeaderLine "^#.*"
 syn match todoDoneLine "^\~.*"
 
 " Highlight dates/repeats in workable (active) items only
 syn match todoDate "\d\{4\}-\d\{2\}-\d\{2\}" contained
-" Oh God... this needs to be fixed to elimitate abbreviated weekdays
-syn match todoRepeat "[+]\?\[ *\%(\%([0-9]\+ \+\)\?\%(day\|week\|month\|year\)s\?\%( \+\%([0-9]\+ \+\)\?\%(day\|week\|month\|year\)s\?\)*\|\%(sun\|mon\|tue\%(s\)\?\|thu\%(rs\)\?\|fri\)\%(day\)\?\|\%(wed\%(nesday\)\?\)\|\%(sat\%(urday\)\?\)\) *\]" contained
+syn match todoRepeat "\v((\+{1,2}|\>)\d+(d|w|m|y)|(\+{2}|\>)(sun|mon|tue|wed|thu|fri|sat))" contained
 
 " Context tags (@context)
 syn match todoContext "@\w\+" contained
 
-" Lint warnings (:!WORD)
+" Lint warnings (:! Warning line.)
 syn match todoLint ":!.*" 
 
 " Define highlight groups
 hi def link todoInbox Special
-hi def link todoSomeday Identifier  
+hi def link todoSomeday Identifier
 hi def link todoHeaderLine Title
 hi def link todoDoneLine Comment
 hi def link todoActiveLine Keyword

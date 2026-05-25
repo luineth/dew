@@ -5,6 +5,8 @@
 # from within a .dew file, or run :%! path/to/dew
 # to filter in place.
 
+# Depends on GNU coreutils date.
+
 BEGIN {
     # grab today's date YYYY-MM-DD
     "date +%F" | getline today
@@ -12,11 +14,16 @@ BEGIN {
 
     date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
 
-    duration = "([0-9]+ +)?(day|week|month|year)s?"
-    weekday = "(sun|mon|tues|wednes|thurs|fri|satur)day"
-    # load-bearing regular expression
-    repeat_regex = "+?[[] *(" duration "( +" duration ")*|" weekday ") *]"
-    }
+    # gawk infers initial plus is literal
+    duration = "[0-9]+(d|w|m|y)"
+    weekday = "(sun|mon|tue|wed|thu|fri|sat)"
+
+    defer_regex = "(>" duration "|>" weekday ")"
+
+    repeat_duration = "+{1,2}" duration
+    repeat_weekday = "+{2}" weekday # only relative repeats supported
+    repeat_regex = "(" repeat_duration "|" repeat_weekday ")"
+}
 
 ## Cleanup
 # strip leading and trailing whitespace
@@ -35,6 +42,21 @@ BEGIN {
 }
 NF { prev_line_is_blank = 0 }
 
+# Defer macro
+$0 ~ defer_regex {
+    match($0, defer_regex)
+    defer_expr = substr($0, RSTART, RLENGTH)
+    gsub(/>/, "", defer_expr)
+    if (defer_expr ~ weekday)
+        new_date = dow_offset(defer_expr)
+    else
+        new_date = duration_offset(today, defer_expr)
+
+    sub(defer_regex, new_date, $0)
+    # kill any duplicates, only leftmost expr processed
+    gsub(defer_regex, "", $0)
+}
+
 ## Special sections
 # directly cache to inbox and someday to respective outputs
 /^\?/ { output["inbox"][++output_n["inbox"]] = $0; next }
@@ -47,33 +69,34 @@ NF { prev_line_is_blank = 0 }
 # repeat handler
 $0 ~ repeat_regex && /^~.+[^~]$/ {
 
-
-    # extract repeat expression
-    match($0, repeat_regex)
-    repeat_expr = substr($0, RSTART, RLENGTH)
-    if (repeat_expr ~ /^+/)
-        anchored_repeat = 0
-    else
-        anchored_repeat = 1
-
-    repeat_from = today #default, unless...
-    if (anchored_repeat) {
-        match($0, date_regex)
-        repeat_from = substr($0, RSTART, RLENGTH)
-    }
-
-    if (repeat_expr ~ weekday && anchored_repeat) {
-        $0 = $0 "\n:! Day-of-week repeats must be relative: e.g. +[tuesday]"
+    # no crossing streams
+    if ($0 ~ repeat_weekday && $0 ~ repeat_duration) {
+        $0 = $0 "\n:! Duration and weekday repeats are mutually exclusive: e.g. ++tue ^ +1w"
         lints++
         done[++done_n] = $0 # keepline w/ warning in place
         next
     }
 
-    if (repeat_expr ~ weekday) {
-        match($0, weekday)
-        new_date = dow_offset(substr($0, RSTART, RLENGTH))
+    # extract leftmost repeat expression;
+    # syntax highlights only leftmost
+    match($0, repeat_regex)
+    repeat_expr = substr($0, RSTART, RLENGTH)
+
+    if (repeat_expr ~ repeat_weekday) {
+        # never anchored repeat
+        gsub(/+/, "", repeat_expr)
+        new_date = dow_offset(repeat_expr)
     } else {
-        gsub(/[\+\[\]]/, "", repeat_expr) # tidy for `date`
+        # duration repeats:
+
+        repeat_from = today #default, unless...
+        # date available & anchored repeat
+        if ($0 ~ date_regex && repeat_expr !~ /+{2}/) {
+            match($0, date_regex)
+            repeat_from = substr($0, RSTART, RLENGTH)
+        }
+
+        gsub(/+/, "", repeat_expr)
         new_date = duration_offset(repeat_from, repeat_expr)
     }
 
@@ -81,22 +104,15 @@ $0 ~ repeat_regex && /^~.+[^~]$/ {
     done[++done_n] = $0 "~"
 
     sub(/^~/, "$") # activate
-    gsub(date_regex, "") # delete any old date
+    gsub(date_regex, "") # delete any old dates
     $0 = $0 " " new_date
     # fall through
 }
 
-# don't let repeat typos silently fail
-$0 ~ /\[.*]/ && $0 !~ repeat_regex {
-    $0 = $0 "\n:! This looks like a malformed repeat expression."
-    lints++
-}
-
-
 /^~/ { done[++done_n] = $0; next }
 
 /^[%$]/ && $0 !~ date_regex {
-    $0 = $0 "\n:! No follow-up date assigned."
+    $0 = $0 "\n:! No follow-up date assigned.\n: Assign one with YYYY-MM-DD or a shortcut, e.g. (>2w)."
     lints++
 }
 
@@ -119,6 +135,15 @@ $0 ~ /\[.*]/ && $0 !~ repeat_regex {
         $0 = ">" $0
 }
 
+# downgrade deferred next actions
+/^>/ && $0 ~ date_regex {
+    match($0, date_regex)
+    date_string = substr($0, RSTART, RLENGTH)
+
+    if(date_string > today)
+        sub(/>/, "$", $0)
+}
+
 /^\$/ { scheduled[++scheduled_n] = $0; next }
 /^%/  { delegated[++delegated_n] = $0; next }
 
@@ -132,7 +157,7 @@ $0 ~ /\[.*]/ && $0 !~ repeat_regex {
 }
 
 # 'next' is reserved; referred to as "workable" in codebase
-/^>/    { workable[++workable_n] = $0; next }
+/^>/ { workable[++workable_n] = $0; next }
 
 # any non-matched items: indent then cache
 NF {
@@ -143,31 +168,16 @@ NF {
 
 # line must be blank to continue:
 # blanks are implicit end of project
+{ cache_project() }
 
-workable_n {
-    project_cache("live")
-    next
-}
-
-delegated_n || scheduled_n {
-    project_cache("dormant")
-    next
-}
-
-# no follow-up and not completed
-pending_n || (header_n && !done_n) {
-    project_cache("live", ":! Project is stalled. Assign a next action or follow-up.")
-    lints++
-    next
-}
-
-# only done tasks:
-{ project_cache("completed") }
 
 END {
-    #inbox section isn't generated via project_cache(),
-    #so it needs a line feed to sep from later sections
+    cache_project() # guards against files not ending in \n
+
+    # these sections aren't generated via cache_project_as(),
+    # so they need a line feed to sep from later sections
     output["inbox"][++output_n["inbox"]] = ""
+    output["someday"][++output_n["someday"]] = ""
 
     if (lints)
         print ": lints: " lints "\n: Search for ':!' to correct.\n"
@@ -197,12 +207,40 @@ END {
     }
 }
 
-function project_cache(section, lint) {
+function cache_project() {
+    if (workable_n) {
+        cache_project_as("live")
+        return
+    }
+
+    if (delegated_n || scheduled_n) {
+        cache_project_as("dormant")
+        return
+    }
+
+    # no follow-up and not completed
+    if (pending_n || (header_n && !done_n)) {
+        cache_project_as("live", ":! Project is stalled. Assign a next action or follow-up.")
+        lints++
+        return
+    }
+
+    # possible header and >1 done:
+    if (done_n) {
+        cache_project_as("completed")
+        return
+    }
+
+    # no tasks at all: do nothing
+    return
+}
+
+function cache_project_as(section, lint) {
     # store any lints
     if (lint)
         output[section][++output_n[section]] = lint
     
-    # transfer project block to its output section
+    # transfer projects to their output section
     append_section(section, header, header_n)
     append_section(section, workable, workable_n)
     append_section(section, delegated, delegated_n)
@@ -233,6 +271,15 @@ function clear_project_cache() {
 }
 
 function duration_offset(repeat_from, repeat_expr,  cmd, result) {
+    # repeat_expr is necessarily (int)(duration), e.g. "2w"
+    # expand to make `date` happy
+    # NB: trailing space neutralizes subsequent sub()s
+    # to prevent "1d" -> "1 day" -> "1 da year"
+    sub(/d$/, " day ",   repeat_expr)
+    sub(/w$/, " week ",  repeat_expr)
+    sub(/m$/, " month ", repeat_expr)
+    sub(/y$/, " year ",  repeat_expr)
+
     cmd = "date -d '" repeat_from " +" repeat_expr "' +%F"
     cmd | getline result
     close(cmd)
@@ -240,7 +287,7 @@ function duration_offset(repeat_from, repeat_expr,  cmd, result) {
 }
 
 function dow_offset(dow,  cmd, result) {
-    cmd = "date -d '" dow "' +%F"
+    cmd = "date -d 'next " dow "' +%F"
     cmd | getline result
     close(cmd)
     return result
