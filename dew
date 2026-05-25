@@ -1,82 +1,102 @@
-#!/usr/bin/gawk -f
+#!/usr/bin/awk -f
 
-# USAGE: pipe your to.dew list to this executable. If the .vim files are
-# installed, use <local leader> + f from within a .dew file, or, run :%! path/to/dew
+# USAGE: pipe your to.dew list to this executable.
+# If the .vim files are installed, use <local leader> + f
+# from within a .dew file, or run :%! path/to/dew
 # to filter in place.
 
 BEGIN {
-    # grab today's date YYYYMMDD
+    # grab today's date YYYY-MM-DD
     "date +%F" | getline today
     close("date +%F")
 
     date_regex = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
-    rel_repeat_regex = "{[0-9]}"
-    dow_repeat_regex = "{(sun|mon|tue|wed|thu|fri|sat)}"
-    month_repeat_regex = "{(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)}"
+    # load-bearing regular expression
+    repeat_regex = "+?[[] *(([0-9]+ +)?(day|week|month|year)s?( +([0-9]+ +)?(day|week|month|year)s?)*|(sun|mon|tue(s)?|thu(rs)?|fri)(day)?|(wed(nesday)?)|(sat(urday)?)) *]"
 }
 
+## Cleanup
+# strip leading and trailing whitespace
+{ gsub(/(^[ \t]+|[ \t]+$)/, "") }
+
 # skip stray one-character lines
-/^\S\s*$/ { next }
+/^.$/ { next }
 
 # skip machine comments
 /^:/ { next }
 
-# strip leading and trailing whitespace
-{
-    sub(/^[ \t]+/, "", $0)
-    sub(/[ \t]+$/, "", $0)
-}
-
-
 # collapse multi-line spacing
 !NF {
     if (prev_line_is_blank) next
-    prev_line_is_blank =1
+    prev_line_is_blank = 1
 }
+NF { prev_line_is_blank = 0 }
 
-NF {
-    prev_line_is_blank = 0
-}
-
-# directly cache to inbox and someday to their respective output sections
+## Special sections
+# directly cache to inbox and someday to respective outputs
 /^\?/ { output["inbox"][++output_n["inbox"]] = $0; next }
 /^&/ { output["someday"][++output_n["someday"]] = $0; next }
 
+## Task is a bona fide project:
+# headers
 /^#/   { header[++header_n] = $0; next }
 
+# repeat handler
+$0 ~ repeat_regex && /^~.+[^~]$/ {
+    # store cancelled task and change status
+    done[++done_n] = $0 "~"
+    sub(/^~/, "$")
 
-# handle simple repeats
-# {#} syntax, integer with number of days frequency
-$0 ~ rel_repeat_regex && /^~.*[^~]$/ {
-    # extract inner value from braces
-    match($0, rel_repeat_regex)
-    repeat_string = substr($0, RSTART, RLENGTH)
-    gsub(/[{}]/, "", repeat_string)
+    # extract repeat expression
+    match($0, repeat_regex)
+    repeat_expr = substr($0, RSTART, RLENGTH)
+    
+    # Repeat from last scheduled date if it's available AND
+    # We're not relative repeating (e.g. +[3 days])
+    if ($0 ~ date_regex && repeat_expr ~ /^[^+]/) {
+        match($0, date_regex)
+        repeat_from = substr($0, RSTART, RLENGTH)
+    } else {
+        repeat_from = today
+    }
 
-    done[++done_n] = $0 "~" # store canceled line
-
-    sub(/^~/, "$", $0)
-    gsub(date_regex, "", $0) # delete old schedule date
-
-    new_date = date_offset(today, repeat_string)
+    gsub(/[\+\[\]]/, "", repeat_expr) # tidy for `date`
+    gsub(date_regex, "")
+    new_date = date_offset(repeat_from, repeat_expr)
     $0 = $0 " " new_date
-    scheduled[++scheduled_n] = $0
-    next
 }
 
 
-/^~/    { done[++done_n] = $0; next }
+/^~/ { done[++done_n] = $0; next }
 
-# prepend "> " to any due reminder dates,
-$0 ~ date_regex {
+/^[%$]/ && $0 !~ date_regex {
+    $0 = $0 "\n:! No follow-up date assigned."
+    lints++
+}
+
+/^%/ {
+    if ($1 == "%") {
+        $0 = $0 "\n:! Delegated to whom?"
+        lints++
+    }
+    else
+        delegated_to[$1]++
+}
+
+
+# activate any due dates
+/^[%$]/ && $0 ~ date_regex {
     match($0, date_regex)
     date_string = substr($0, RSTART, RLENGTH)
 
     if(date_string <= today)
-        sub(/^[\$%]/, ">", $0) # only activate due $ or %
+        $0 = ">" $0
 }
 
-# record contexs from workable tasks
+/^\$/ { scheduled[++scheduled_n] = $0; next }
+/^%/  { delegated[++delegated_n] = $0; next }
+
+# record contexs from next tasks
 /^>.*@.+/ {
     for(i = 1; i <= NF; i++) {
         if(match($i, /^@.+$/)) {
@@ -85,96 +105,90 @@ $0 ~ date_regex {
     }
 }
 
+# 'next' is reserved; referred to as "workable" in codebase
 /^>/    { workable[++workable_n] = $0; next }
 
-# lint any scheduled or delegated tasks w/o follow up dates
-(/^\$/ || /^%/) && $0 !~ date_regex {
-    $0 = $0 "\n:! DATE"
-}
-
-/^\$/ { scheduled[++scheduled_n] = $0; next }
-
-/^%/ {
-    delegated_to[$1]++
-    delegated[++delegated_n] = $0
-}
-
-# any non-matched items: indented then cached
+# any non-matched items: indent then cache
 NF {
-    $0 = "  " $0
-    blocked[++blocked_n] = $0
+    $0 = " " $0
+    pending[++pending_n] = $0
     next
-    }
+}
 
 # line must be blank to continue:
 # blanks are implicit end of project
 
 workable_n {
-    blockprint("live")
+    project_print("live")
     next
 }
 
 delegated_n || scheduled_n {
-    blockprint("inactive")
+    project_print("dormant")
     next
 }
 
-blocked_n {
-    blockprint("live", ":! BLOCKED")
+pending_n || (header_n && !done_n) {
+    project_print("live", ":! Project is stalled. Assign a next action or follow-up.")
+    lints++
     next
 }
 
-# only done or headers:
-{ blockprint("completed") }
+# only done tasks:
+{ project_print("completed") }
 
-function blockprint(section, lint) {
-    # store any warning
-    if (lint) output[section][++output_n[section]] = lint
+function project_print(section, lint) {
+    # store any lints
+    if (lint)
+        output[section][++output_n[section]] = lint
     
     # transfer project block to its output section
-    for (i = 1; i <= header_n; i++) {
-        output[section][++output_n[section]] = header[i]
-    }
-    for (i = 1; i <= done_n; i++) {
-        output[section][++output_n[section]] = done[i]
-    }
-    for (i = 1; i <= workable_n; i++) {
-        output[section][++output_n[section]] = workable[i]
-    }
-    for (i = 1; i <= delegated_n; i++) {
-        output[section][++output_n[section]] = delegated[i]
-    }
-    for (i = 1; i <= scheduled_n; i++) {
-        output[section][++output_n[section]] = scheduled[i]
-    }
-    for (i = 1; i <= blocked_n; i++) {
-        output[section][++output_n[section]] = blocked[i]
-    }
+    append_section(section, header, header_n)
+    append_section(section, done, done_n)
+    append_section(section, workable, workable_n)
+    append_section(section, delegated, delegated_n)
+    append_section(section, scheduled, scheduled_n)
+    append_section(section, pending, pending_n)
+
     output[section][++output_n[section]] = ""
 
+    clear_project_cache()
+}
 
-    # flush project block cache
+function append_section(section, arr, count,    i) {
+    for (i = 1; i <= count; i++) {
+        output[section][++output_n[section]] = arr[i]
+    }
+}
+
+function clear_project_cache() {
     delete header
     delete done
     delete workable
     delete delegated
     delete scheduled
-    delete blocked
-    header_n = done_n = workable_n = delegated_n = scheduled_n = blocked_n = 0
+    delete pending
+
+    header_n = done_n = workable_n = delegated_n = scheduled_n = pending_n = 0
 }
 
-
 END {
+    if (lints)
+        print ": lints: " lints "\n: Search for ':!' to correct.\n"
 
-    print ": Inbox:", output_n["inbox"]
-    print ": Context counts:"
+    print ": inbox:", output_n["inbox"]
+
+    print ": context counts:"
     for (i in contexts)
         print ":\t" i ": " contexts[i]
+    print ": delegated counts:"
+    for (i in delegated_to)
+        print ":\t" i ": " delegated_to[i]
     printf("\n")
 
     output_section[1] = "inbox"
-    output_section[2] = "ready"
-    output_section[3] = "inactive"
+    output_section[2] = "live"
+    output_section[3] = "dormant"
     output_section[4] = "someday"
     output_section[5] = "completed"
 
@@ -188,12 +202,9 @@ END {
     }
 }
 
-
-function date_offset(date_str, offset,  cmd, result) { 
-    cmd = "date -d \"" date_str " " ((offset >=0) ? "+" offset : offset) " days\" +%F"
-
+function date_offset(repeat_from, repeat_expr,  cmd, result) {
+    cmd = "date -d '" repeat_from " +" repeat_expr "' +%F"
     cmd | getline result
     close(cmd)
-
     return result
 }
