@@ -71,9 +71,8 @@ $0 ~ DEFER_RE {
 $0 ~ REPEAT_RE && /^~.+[^~]$/ {
     # pick a lane
     if ($0 ~ REPEAT_WEEKDAY_RE && $0 ~ REPEAT_DURATION_RE) {
-        $0 = $0 "\n:! Duration and weekday repeats are mutually exclusive: e.g. ++tue ^ +1w"
-        lints++
-        done[++done_n] = $0 # keepline w/ warning in place
+        task_lint("Duration and weekday repeats are mutually exclusive: e.g. ++tue ^ +1w")
+        done[++done_n] = $0 # keep line w/ warning in place
         next
     }
 
@@ -105,15 +104,12 @@ $0 ~ REPEAT_RE && /^~.+[^~]$/ {
 /^~/ { done[++done_n] = $0; next }
 
 /^[%$]/ && $0 !~ DATE_RE {
-    $0 = $0 "\n:! No follow-up date assigned.\n: Assign one with YYYY-MM-DD or a shortcut, e.g. '>2w'."
-    lints++
+    task_lint("No follow-up date. Assign one with YYYY-MM-DD or a shortcut, e.g. '>2w'.")
 }
 
 /^%/ {
-    if ($1 == "%") {
-        $0 = $0 "\n:! Delegated to whom?"
-        lints++
-    }
+    if ($1 == "%")
+        task_lint("Delegated to whom? Use '%person'.")
     else
         delegated_to[$1]++
 }
@@ -164,6 +160,8 @@ NF {
 END {
     cache_project() # guards against files not ending in \n
 
+    print_header()
+
     # these sections aren't generated via cache_project_as(),
     # so they need a line feed to sep from later sections
     inbox_n = output_n["inbox"] # prevent off by one from following:
@@ -195,13 +193,8 @@ END {
 
     for( i = 1; i <= 5; i++) {
         sec = section[i]
-
-        if (!output_n[sec]) {
-            print ": no " sec " projects"
-            continue
-        }
         
-        print ": " section[i]
+        print ": " sec
         for(j = 1; j <= output_n[sec]; j++) {
             print output[sec][j]
         }
@@ -221,8 +214,7 @@ function cache_project() {
 
     # no follow-up and not completed
     if (pending_n || (header_n && !done_n)) {
-        cache_project_as("live", ":! Project is stalled. Assign a next action or follow-up.")
-        lints++
+        cache_project_as("live", "Project is stalled. Assign a next action or follow-up.")
         return
     }
 
@@ -237,9 +229,11 @@ function cache_project() {
 }
 
 function cache_project_as(section, lint) {
-    # store any lints
-    if (lint)
-        output[section][++output_n[section]] = lint
+    # store any project lint warnings
+    if (lint) {
+        output[section][++output_n[section]] = ":! " lint
+        lints++
+    }
     
     # transfer projects to their output section
     append_section(section, header, header_n)
@@ -298,4 +292,13 @@ function extract(pattern, string) {
     if (match(string, pattern))
         return substr(string, RSTART, RLENGTH)
     return ""
+}
+
+function task_lint(msg) {
+    $0 = $0 "\n:! " msg
+    lints++
+}
+
+function print_header() {
+    print ": - dew task manager -"
 }
