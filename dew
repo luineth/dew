@@ -20,17 +20,23 @@ BEGIN {
     DEFER_RE = "(>" DURATION_RE "|>" WEEKDAY_RE ")\\>"
 
     REPEAT_DURATION_RE = "+{1,2}" DURATION_RE
+    INVALID_DURATION_RE = "+{1,2}[0-9]+[^dwmy]"
     REPEAT_WEEKDAY_RE = "+{2}" WEEKDAY_RE # only relative repeats supported
+    INVALID_WEEKDAY_RE = "+" WEEKDAY_RE
     REPEAT_RE = "(" REPEAT_DURATION_RE "|" REPEAT_WEEKDAY_RE ")\\>"
+
+    print ": -- dew task filter --"
+    #print ": for help topics, add a hyphen to a blank line, then rerun dew"
+    help["help"] = "under construction!\n" \
+        "check later"
 }
+
+/^-/ { print; process_help(); next }
 
 ## Cleanup ##
 
 # strip leading and trailing whitespace
 { gsub(/(^[ \t]+|[ \t]+$)/, "") }
-
-# skip stray one-character lines
-/^.$/ { next }
 
 # skip machine comments
 /^:/ { next }
@@ -101,6 +107,10 @@ $0 ~ REPEAT_RE && /^~.+[^~]$/ {
     # fall through
 }
 
+$0 ~ INVALID_WEEKDAY_RE || $0 ~ INVALID_DURATION_RE {
+    task_lint("Looks like a malformed repeat expression.")
+}
+
 /^~/ { done[++done_n] = $0; next }
 
 /^[%$]/ && $0 !~ DATE_RE {
@@ -159,8 +169,6 @@ NF {
 
 END {
     cache_project() # guards against files not ending in \n
-
-    print_header()
 
     # these sections aren't generated via cache_project_as(),
     # so they need a line feed to sep from later sections
@@ -299,6 +307,31 @@ function task_lint(msg) {
     lints++
 }
 
-function print_header() {
-    print ": - dew task manager -"
+function process_help(    topic, arg) {
+    # extract topic & sanitize
+    arg = substr($0, 2)
+    gsub(/[^a-z]/, "", arg)
+
+    if (arg == "") {
+        print_help_index()
+    } else if (arg in help) {
+        print ":- " arg
+        print help[arg]
+    } else {
+        print ":- unknown topic: " arg
+        print_help_index()
+    }
+}
+
+function print_help_index() {
+    print ":- help topic index:"
+    print ":- access topic with '-topic' on a blank line"
+    for(topic in help)
+        print ":-\t-" topic
+}
+
+function print_help_text(text,    lines, n, i) {
+    n = split(text, lines, "\n")
+    for(i = 1; i <= n; i++)
+        print ":- " lines[i]
 }
