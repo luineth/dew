@@ -52,9 +52,9 @@ $0 ~ DEFER_RE {
     else
         new_date = duration_offset(today, defer_expr)
 
-    sub(DEFER_RE, new_date, $0)
-    # kill any duplicates, only leftmost expr processed
-    gsub(DEFER_RE, "", $0)
+    gsub(DATE_RE, "") # kill any old date
+    sub(DEFER_RE, new_date)
+    gsub(DEFER_RE, "") # kill any duplicate defers
 }
 
 ## Non-Project tasks ##
@@ -118,7 +118,6 @@ $0 ~ REPEAT_RE && /^~.+[^~]$/ {
     else
         delegated_to[$1]++
 }
-
 
 # activate any due dates
 /^[%$]/ && $0 ~ DATE_RE {
