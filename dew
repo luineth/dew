@@ -12,169 +12,173 @@ BEGIN {
     "date +%F" | getline today
     close("date +%F")
 
-    DATE_RE = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    CONTEXT = "@[^ \t]+"
+    DATE = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
 
-    DURATION_RE = "[0-9]+(d|w|m|y)"
-    WEEKDAY_RE = "(sun|mon|tue|wed|thu|fri|sat)"
+    DURATION = "[0-9]+(d|w|m|y)"
+    WEEKDAY = "(sun|mon|tue|wed|thu|fri|sat)"
 
-    DEFER_RE = "(>" DURATION_RE "|>" WEEKDAY_RE ")\\>"
+    DEFER = "(>" DURATION "|>" WEEKDAY ")\\>"
 
-    REPEAT_DURATION_RE = "+{1,2}" DURATION_RE
-    INVALID_DURATION_RE = "+{1,2}[0-9]+[^dwmy]"
-    REPEAT_WEEKDAY_RE = "+{2}" WEEKDAY_RE # only relative repeats supported
-    INVALID_WEEKDAY_RE = "+" WEEKDAY_RE
-    REPEAT_RE = "(" REPEAT_DURATION_RE "|" REPEAT_WEEKDAY_RE ")\\>"
+    RELATIVE_REPEAT = "+{2}(" DURATION "|" WEEKDAY ")"
+    ANCHORED_REPEAT = "+" DURATION
+
+    TASK_STATUS["PENDING"] =    " "
+    TASK_STATUS["INBOX"] =      "?"
+    TASK_STATUS["NEXT"] =       ">"
+    TASK_STATUS["SCHEDULED"] =  "$"
+    TASK_STATUS["DELEGATED"] =  "%"
+    TASK_STATUS["SOMEDAY"] =    "&"
+    TASK_STATUS["COMMENT"] =    ":"
+    TASK_STATUS["DONE"] =       "~"
+    TASK_STATUS["HEADER"] =     "#"
+
+    # build reverse map
+    for (s in TASK_STATUS)
+        STATUS_FROM_SIGIL[TASK_STATUS[s]] = s
+
+    PROJECT_ORDER = "HEADER NEXT PENDING DELEGATED SCHEDULED DONE"
+    split(PROJECT_ORDER, PROJECT_ORDER_PARTS)
+    OUTPUT_ORDER = "INBOX LIVE DORMANT SOMEDAY COMPLETED"
+    split(OUTPUT_ORDER, OUTPUT_ORDER_PARTS)
+
+    DEFAULT_TASK_STATUS = TASK_STATUS["PENDING"]
+
+    PROCESSED = ".+~$"
 
     print ": -- dew task filter --"
-    #print ": for help topics, add a hyphen to a blank line, then rerun dew"
-    help["help"] = "under construction!\n" \
-        "check later"
 }
-
-/^-/ { print; process_help(); next }
 
 ## Cleanup ##
 
-# strip leading and trailing whitespace
-{ gsub(/(^[ \t]+|[ \t]+$)/, "") }
+# collapse multi-line spacing
+! NF && last_line_blank { next }
+!NF { last_line_blank = 1 }
+NF { last_line_blank = 0 }
+
+# process projects at newline boundary
+!NF { cache_project(); next }
+
+# trim whitespace
+{ gsub(/(^[ \t]+|[ \t]+$)/, "") } 
+
+{ status = task_status() }
+
+status == 0 {
+    # add, rather than substitute with change_status()
+    $0 = DEFAULT_TASK_STATUS $0
+    status = task_status()
+}
 
 # skip machine comments
-/^:/ { next }
-
-# collapse multi-line spacing
-!NF {
-    if (prev_line_is_blank) next
-    prev_line_is_blank = 1
-}
-NF { prev_line_is_blank = 0 }
+status == "COMMENT" { next }
 
 # defer macro
-$0 ~ DEFER_RE {
-    defer_expr = extract(DEFER_RE, $0)
+$0 ~ DEFER {
+    defer_expr = copy(DEFER, $0)
     gsub(/>/, "", defer_expr)
-    if (defer_expr ~ WEEKDAY_RE)
+    if (defer_expr ~ WEEKDAY)
         new_date = dow_offset(defer_expr)
     else
         new_date = duration_offset(today, defer_expr)
 
-    gsub(DATE_RE, "") # kill any old date
-    sub(DEFER_RE, new_date)
-    gsub(DEFER_RE, "") # kill any duplicate defers
+    gsub(DATE, "") # kill any old date
+    sub(DEFER, new_date)
+    gsub(DEFER, "") # kill any duplicate defers
 }
 
 ## Non-Project tasks ##
 
 # directly cache to inbox and someday to respective outputs
-/^\?/ { output["inbox"][++output_n["inbox"]] = $0; next }
-/^&/ { output["someday"][++output_n["someday"]] = $0; next }
+status == "INBOX" { output["INBOX"][++output_n["INBOX"]] = $0; next }
+status == "SOMEDAY" { output["SOMEDAY"][++output_n["SOMEDAY"]] = $0; next }
 
-## Project logic ##
+# repeat handlers
 
-# headers
-/^#/   { header[++header_n] = $0; next }
+status == "DONE" && \
+$0 !~ PROCESSED && \
+$0 ~ RELATIVE_REPEAT {
+    repeat_expr = copy(RELATIVE_REPEAT, $0)
+    gsub(/+/, "", repeat_expr) #strip sigils
 
-# repeat handler
-$0 ~ REPEAT_RE && /^~.+[^~]$/ {
-    # pick a lane
-    if ($0 ~ REPEAT_WEEKDAY_RE && $0 ~ REPEAT_DURATION_RE) {
-        task_lint("Duration and weekday repeats are mutually exclusive: e.g. ++tue ^ +1w")
-        done[++done_n] = $0 # keep line w/ warning in place
-        next
-    }
-
-    repeat_expr = extract(REPEAT_RE, $0)
-    if (repeat_expr ~ REPEAT_WEEKDAY_RE) {
-        # these repeats never anchored
-        gsub(/+/, "", repeat_expr)
+    if(repeat_expr ~ WEEKDAY)
         new_date = dow_offset(repeat_expr)
-    } else {
-        # duration repeats:
-        repeat_from = today #default, unless...
-        # date available & anchored repeat
-        if ($0 ~ DATE_RE && repeat_expr !~ /+{2}/)
-            repeat_from = extract(DATE_RE,$0)
-
-        gsub(/+/, "", repeat_expr)
-        new_date = duration_offset(repeat_from, repeat_expr)
-    }
-
-    # store cancelled task
-    done[++done_n] = $0 "~"
-
-    sub(/^~/, "$") # activate
-    gsub(DATE_RE, "") # delete any old dates
-    $0 = $0 " " new_date
-    # fall through
+    if(repeat_expr ~ DURATION)
+        new_date = duration_offset(today, repeat_expr)
+    
+    store_old_and_repeat(new_date)
 }
 
-$0 ~ INVALID_WEEKDAY_RE || $0 ~ INVALID_DURATION_RE {
-    task_lint("Looks like a malformed repeat expression.")
+status == "DONE" && \
+$0 !~ PROCESSED && \
+$0 ~ ANCHORED_REPEAT {
+    repeat_expr = copy(ANCHORED_REPEAT, $0)
+    gsub(/+/, "", repeat_expr) #strip sigils
+    
+    if ($0 ~ DATE)
+        old_date = copy(DATE, task[tid])
+    else
+        old_date = today
+
+    new_date = duration_offset(old_date, repeat_expr)
+    store_old_and_repeat(new_date)
 }
 
-/^~/ { done[++done_n] = $0; next }
-
-/^[%$]/ && $0 !~ DATE_RE {
+/^[%$]/ && $0 !~ DATE {
     task_lint("No follow-up date. Assign one with YYYY-MM-DD or a shortcut, e.g. '>2w'.")
 }
 
-/^%/ {
-    if ($1 == "%")
+status == "DELEGATED" {
+    if ($1 == TASK_STATUS["DELEGATED"]) # i.e., '%' then a space
         task_lint("Delegated to whom? Use '%person'.")
     else
         delegated_to[$1]++
 }
 
 # activate any due dates
-/^[%$]/ && $0 ~ DATE_RE {
-    date_string = extract(DATE_RE, $0)
+(status == "SCHEDULED" || status == "DELEGATED") && \
+$0 ~ DATE {
+    date_string = copy(DATE, $0)
 
     if(date_string <= today)
-        $0 = ">" $0
+        change_status("NEXT")
 }
 
 # downgrade deferred next actions
-/^>/ && $0 ~ DATE_RE {
-    date_string = extract(DATE_RE, $0)
+status == "NEXT" && $0 ~ DATE {
+    date_string = copy(DATE, $0)
 
     if(date_string > today)
-        sub(/>/, "$")
+        change_status("DELEGATED")
 }
-
-/^\$/ { scheduled[++scheduled_n] = $0; next }
-/^%/  { delegated[++delegated_n] = $0; next }
 
 # record contexts from next tasks
-/^>.*@.+/ {
-    for(i = 1; i <= NF; i++) {
-        if(match($i, /^@.+$/)) {
-            contexts[$i]++
-        }
-    }
+status == "NEXT" && \
+$0 ~ CONTEXT {
+    context = copy(CONTEXT, $0)
+    contexts[context]++
 }
 
+# store tasks into project
+{
+    project[status][++project_n[status]] = $0
+}
 # 'next' is reserved; referred to as "workable" in codebase
-/^>/ { workable[++workable_n] = $0; next }
-
-# any non-matched items: indent then cache
-NF {
-    $0 = " " $0
-    pending[++pending_n] = $0
-    next
-}
-
-# line must be blank to continue:
-# blanks are implicit end of project
-{ cache_project() }
-
+#task_status() == "NEXT" { workable[++workable_n] = $0; next }
+#task_status() == "HEADER"{ header[++header_n] = $0; next }
+#task_status() == "PENDING" { pending[++pending_n] = $0; next}
+#task_status() == "SCHEDULED" { scheduled[++scheduled_n] = $0; next }
+#task_status() == "DELEGATED" { delegated[++delegated_n] = $0; next }
+#task_status() == "DONE" { done[++done_n] = $0; next }
 
 END {
     cache_project() # guards against files not ending in \n
 
     # these sections aren't generated via cache_project_as(),
     # so they need a line feed to sep from later sections
-    inbox_n = output_n["inbox"] # prevent off by one from following:
-    output["inbox"][++output_n["inbox"]] = ""
-    output["someday"][++output_n["someday"]] = ""
+    inbox_n = output_n["INBOX"] # prevent off by one from following:
+    output["INBOX"][++output_n["INBOX"]] = ""
+    output["SOMEDAY"][++output_n["SOMEDAY"]] = ""
 
     if (lints)
         print ": lints: " lints "\n: Search for ':!' to correct.\n"
@@ -193,14 +197,8 @@ END {
     }
     print ""
 
-    section[1] = "inbox"
-    section[2] = "live"
-    section[3] = "dormant"
-    section[4] = "someday"
-    section[5] = "completed"
-
-    for( i = 1; i <= 5; i++) {
-        sec = section[i]
+    for( i = 1; i <= length(OUTPUT_ORDER_PARTS); i++) {
+        sec = OUTPUT_ORDER_PARTS[i]
         
         print ": " sec
         for(j = 1; j <= output_n[sec]; j++) {
@@ -210,25 +208,26 @@ END {
 }
 
 function cache_project() {
-    if (workable_n) {
-        cache_project_as("live")
+    if (project_n["NEXT"]) {
+        cache_project_as("LIVE")
         return
     }
 
-    if (delegated_n || scheduled_n) {
-        cache_project_as("dormant")
+    if (project_n["DELEGATED"] || project_n["SCHEDULED"]) {
+        cache_project_as("DORMANT")
         return
     }
 
     # no follow-up and not completed
-    if (pending_n || (header_n && !done_n)) {
-        cache_project_as("live", "Project is stalled. Assign a next action or follow-up.")
+    if (project_n["PENDING"] ||
+    (project_n["HEADER"] && !project_n["DONE"])) {
+        cache_project_as("LIVE", "Project is stalled. Assign a next action or follow-up.")
         return
     }
 
     # possible header and >1 done:
-    if (done_n) {
-        cache_project_as("completed")
+    if (project_n["DONE"]) {
+        cache_project_as("COMPLETED")
         return
     }
 
@@ -236,41 +235,31 @@ function cache_project() {
     return
 }
 
-function cache_project_as(section, lint) {
+function cache_project_as(section, lint,    order, i, status, j) {
     # store any project lint warnings
     if (lint) {
         output[section][++output_n[section]] = ":! " lint
         lints++
     }
     
-    # transfer projects to their output section
-    append_section(section, header, header_n)
-    append_section(section, workable, workable_n)
-    append_section(section, delegated, delegated_n)
-    append_section(section, scheduled, scheduled_n)
-    append_section(section, pending, pending_n)
-    append_section(section, done, done_n)
+    for(i = 1; i <= length(PROJECT_ORDER_PARTS); i++) {
+        status = PROJECT_ORDER_PARTS[i]
+        for(j = 1; j <= project_n[status]; j++)
+            output[section][++output_n[section]] = project[status][j]
+    }
 
     output[section][++output_n[section]] = ""
-
     clear_project_cache()
 }
 
-function append_section(section, arr, count,    i) {
-    for (i = 1; i <= count; i++) {
-        output[section][++output_n[section]] = arr[i]
-    }
+function change_status(new_status) {
+    sub(/./, TASK_STATUS[new_status])
+    status = task_status() # refresh global status variable
 }
 
 function clear_project_cache() {
-    delete header
-    delete done
-    delete workable
-    delete delegated
-    delete scheduled
-    delete pending
-
-    header_n = done_n = workable_n = delegated_n = scheduled_n = pending_n = 0
+    delete project
+    delete project_n
 }
 
 function duration_offset(repeat_from, repeat_expr,  cmd, result) {
@@ -296,10 +285,19 @@ function dow_offset(dow,  cmd, result) {
     return result
 }
 
-function extract(pattern, string) {
+function copy(pattern, string) {
     if (match(string, pattern))
         return substr(string, RSTART, RLENGTH)
     return ""
+}
+
+function store_old_and_repeat(new_date) {
+    # store cancelled task
+    project["DONE"][++project_n["DONE"]] = $0 "~"
+
+    sub(/^~/, "$") # activate
+    gsub(DATE, "") # delete any old dates
+    $0 = $0 " " new_date
 }
 
 function task_lint(msg) {
@@ -307,31 +305,9 @@ function task_lint(msg) {
     lints++
 }
 
-function process_help(    topic, arg) {
-    # extract topic & sanitize
-    arg = substr($0, 2)
-    gsub(/[^a-z]/, "", arg)
-
-    if (arg == "") {
-        print_help_index()
-    } else if (arg in help) {
-        print ":- " arg
-        print help[arg]
-    } else {
-        print ":- unknown topic: " arg
-        print_help_index()
-    }
-}
-
-function print_help_index() {
-    print ":- help topic index:"
-    print ":- access topic with '-topic' on a blank line"
-    for(topic in help)
-        print ":-\t-" topic
-}
-
-function print_help_text(text,    lines, n, i) {
-    n = split(text, lines, "\n")
-    for(i = 1; i <= n; i++)
-        print ":- " lines[i]
+function task_status() {
+    if(substr($0,1,1) in STATUS_FROM_SIGIL)
+        return STATUS_FROM_SIGIL[substr($0,1,1)]
+    
+    return 0 # non-matched
 }
