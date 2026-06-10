@@ -23,30 +23,30 @@ BEGIN {
     RELATIVE_REPEAT = "+{2}(" DURATION "|" WEEKDAY ")"
     ANCHORED_REPEAT = "+" DURATION
 
-    TASK_STATUS["PENDING"] =    " "
-    TASK_STATUS["INBOX"] =      "?"
-    TASK_STATUS["NEXT"] =       ">"
-    TASK_STATUS["SCHEDULED"] =  "$"
-    TASK_STATUS["DELEGATED"] =  "%"
-    TASK_STATUS["SOMEDAY"] =    "&"
-    TASK_STATUS["COMMENT"] =    ":"
-    TASK_STATUS["DONE"] =       "~"
-    TASK_STATUS["HEADER"] =     "#"
-
+    SIGIL_OF["PENDING"] =    " "
+    SIGIL_OF["INBOX"] =      "?"
+    SIGIL_OF["NEXT"] =       ">"
+    SIGIL_OF["SCHEDULED"] =  "$"
+    SIGIL_OF["DELEGATED"] =  "%"
+    SIGIL_OF["SOMEDAY"] =    "&"
+    SIGIL_OF["COMMENT"] =    ":"
+    SIGIL_OF["DONE"] =       "~"
+    SIGIL_OF["HEADER"] =     "#"
+    DEFAULT_TASK_STATUS = SIGIL_OF["PENDING"]
     # build reverse map
-    for (s in TASK_STATUS)
-        STATUS_FROM_SIGIL[TASK_STATUS[s]] = s
+    for (s in SIGIL_OF)
+        STATUS_OF[SIGIL_OF[s]] = s
 
-    PROJECT_ORDER = "HEADER NEXT PENDING DELEGATED SCHEDULED DONE"
-    split(PROJECT_ORDER, PROJECT_ORDER_PARTS)
-    OUTPUT_ORDER = "INBOX LIVE DORMANT SOMEDAY COMPLETED"
-    split(OUTPUT_ORDER, OUTPUT_ORDER_PARTS)
+    PROJECT = "HEADER NEXT PENDING DELEGATED SCHEDULED DONE"
+    split(PROJECT, PROJECT_ORDER)
+    OUTPUT = "INBOX LIVE DORMANT SOMEDAY COMPLETED"
+    split(OUTPUT, OUTPUT_ORDER)
 
-    DEFAULT_TASK_STATUS = TASK_STATUS["PENDING"]
+    
 
     PROCESSED = ".+~$"
 
-    print ": -- dew task filter --"
+    print SIGIL_OF["COMMENT"] " -- dew task filter --"
 }
 
 ## Cleanup ##
@@ -62,16 +62,14 @@ NF { last_line_blank = 0 }
 # trim whitespace
 { gsub(/(^[ \t]+|[ \t]+$)/, "") } 
 
-{ status = task_status() }
-
-status == 0 {
+task_status() == 0 {
     # add, rather than substitute with change_status()
     $0 = DEFAULT_TASK_STATUS $0
-    status = task_status()
+    #status = task_status()
 }
 
 # skip machine comments
-status == "COMMENT" { next }
+task_status() == "COMMENT" { next }
 
 # defer macro
 $0 ~ DEFER {
@@ -90,12 +88,12 @@ $0 ~ DEFER {
 ## Non-Project tasks ##
 
 # directly cache to inbox and someday to respective outputs
-status == "INBOX" { output["INBOX"][++output_n["INBOX"]] = $0; next }
-status == "SOMEDAY" { output["SOMEDAY"][++output_n["SOMEDAY"]] = $0; next }
+task_status() == "INBOX" { output["INBOX"][++output_n["INBOX"]] = $0; next }
+task_status() == "SOMEDAY" { output["SOMEDAY"][++output_n["SOMEDAY"]] = $0; next }
 
 # repeat handlers
 
-status == "DONE" && \
+task_status() == "DONE" && \
 $0 !~ PROCESSED && \
 $0 ~ RELATIVE_REPEAT {
     repeat_expr = copy(RELATIVE_REPEAT, $0)
@@ -109,7 +107,7 @@ $0 ~ RELATIVE_REPEAT {
     store_old_and_repeat(new_date)
 }
 
-status == "DONE" && \
+task_status() == "DONE" && \
 $0 !~ PROCESSED && \
 $0 ~ ANCHORED_REPEAT {
     repeat_expr = copy(ANCHORED_REPEAT, $0)
@@ -124,19 +122,20 @@ $0 ~ ANCHORED_REPEAT {
     store_old_and_repeat(new_date)
 }
 
-/^[%$]/ && $0 !~ DATE {
+(task_status() == "SCHEDULED" || task_status() == "DELEGATED") && \
+$0 !~ DATE {
     task_lint("No follow-up date. Assign one with YYYY-MM-DD or a shortcut, e.g. '>2w'.")
 }
 
-status == "DELEGATED" {
-    if ($1 == TASK_STATUS["DELEGATED"]) # i.e., '%' then a space
+task_status() == "DELEGATED" {
+    if ($1 == SIGIL_OF["DELEGATED"]) # i.e., '%' then a space
         task_lint("Delegated to whom? Use '%person'.")
     else
         delegated_to[$1]++
 }
 
 # activate any due dates
-(status == "SCHEDULED" || status == "DELEGATED") && \
+(task_status() == "SCHEDULED" || task_status() == "DELEGATED") && \
 $0 ~ DATE {
     date_string = copy(DATE, $0)
 
@@ -145,7 +144,7 @@ $0 ~ DATE {
 }
 
 # downgrade deferred next actions
-status == "NEXT" && $0 ~ DATE {
+task_status() == "NEXT" && $0 ~ DATE {
     date_string = copy(DATE, $0)
 
     if(date_string > today)
@@ -153,7 +152,7 @@ status == "NEXT" && $0 ~ DATE {
 }
 
 # record contexts from next tasks
-status == "NEXT" && \
+task_status() == "NEXT" && \
 $0 ~ CONTEXT {
     context = copy(CONTEXT, $0)
     contexts[context]++
@@ -161,15 +160,8 @@ $0 ~ CONTEXT {
 
 # store tasks into project
 {
-    project[status][++project_n[status]] = $0
+    project[task_status()][++project_n[task_status()]] = $0
 }
-# 'next' is reserved; referred to as "workable" in codebase
-#task_status() == "NEXT" { workable[++workable_n] = $0; next }
-#task_status() == "HEADER"{ header[++header_n] = $0; next }
-#task_status() == "PENDING" { pending[++pending_n] = $0; next}
-#task_status() == "SCHEDULED" { scheduled[++scheduled_n] = $0; next }
-#task_status() == "DELEGATED" { delegated[++delegated_n] = $0; next }
-#task_status() == "DONE" { done[++done_n] = $0; next }
 
 END {
     cache_project() # guards against files not ending in \n
@@ -197,8 +189,8 @@ END {
     }
     print ""
 
-    for( i = 1; i <= length(OUTPUT_ORDER_PARTS); i++) {
-        sec = OUTPUT_ORDER_PARTS[i]
+    for( i = 1; i <= length(OUTPUT_ORDER); i++) {
+        sec = OUTPUT_ORDER[i]
         
         print ": " sec
         for(j = 1; j <= output_n[sec]; j++) {
@@ -242,8 +234,8 @@ function cache_project_as(section, lint,    order, i, status, j) {
         lints++
     }
     
-    for(i = 1; i <= length(PROJECT_ORDER_PARTS); i++) {
-        status = PROJECT_ORDER_PARTS[i]
+    for(i = 1; i <= length(PROJECT_ORDER); i++) {
+        status = PROJECT_ORDER[i]
         for(j = 1; j <= project_n[status]; j++)
             output[section][++output_n[section]] = project[status][j]
     }
@@ -253,8 +245,8 @@ function cache_project_as(section, lint,    order, i, status, j) {
 }
 
 function change_status(new_status) {
-    sub(/./, TASK_STATUS[new_status])
-    status = task_status() # refresh global status variable
+    sub(/./, SIGIL_OF[new_status])
+    #status = task_status() # refresh global status variable
 }
 
 function clear_project_cache() {
@@ -295,7 +287,7 @@ function store_old_and_repeat(new_date) {
     # store cancelled task
     project["DONE"][++project_n["DONE"]] = $0 "~"
 
-    sub(/^~/, "$") # activate
+    change_status("SCHEDULED") # activate
     gsub(DATE, "") # delete any old dates
     $0 = $0 " " new_date
 }
@@ -306,8 +298,8 @@ function task_lint(msg) {
 }
 
 function task_status() {
-    if(substr($0,1,1) in STATUS_FROM_SIGIL)
-        return STATUS_FROM_SIGIL[substr($0,1,1)]
+    if(substr($0,1,1) in STATUS_OF)
+        return STATUS_OF[substr($0,1,1)]
     
     return 0 # non-matched
 }
